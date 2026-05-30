@@ -1,0 +1,3 @@
+[submodule "extern/verif"]
+	path = extern/verif
+	url = git@personal:gmcastil/verif
