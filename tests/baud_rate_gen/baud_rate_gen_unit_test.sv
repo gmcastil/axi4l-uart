@@ -87,7 +87,7 @@ module baud_rate_gen_unit_test;
         cb.baud_gen_en  <= 1;
         ##4;                        // cycles 1-4: no tick yet
         `FAIL_UNLESS_EQUAL(cb.baud_tick, 1'b0);
-        ##1;                        // cycle 5: tick fires
+        ##2;                        // cycle 5: tick fires; +1 to read that cycle's result
         `FAIL_UNLESS_EQUAL(cb.baud_tick, 1'b1);
     `SVTEST_END
 
@@ -96,7 +96,7 @@ module baud_rate_gen_unit_test;
         cb.baud_div     <= 15'd4;
         ##1;
         cb.baud_gen_en  <= 1;
-        ##5;                        // tick fires
+        ##6;                        // tick fires at cycle 5; +1 to read that cycle's result
         `FAIL_UNLESS_EQUAL(cb.baud_tick, 1'b1);
         ##1;                        // tick deasserts
         `FAIL_UNLESS_EQUAL(cb.baud_tick, 1'b0);
@@ -107,7 +107,7 @@ module baud_rate_gen_unit_test;
         cb.baud_div     <= 15'd4;
         ##1;
         cb.baud_gen_en  <= 1;
-        ##5;                        // first tick
+        ##6;                        // tick fires at cycle 5; +1 to read that cycle's result
         `FAIL_UNLESS_EQUAL(cb.baud_tick, 1'b1);
         ##4;                        // 4 cycles later: not yet
         `FAIL_UNLESS_EQUAL(cb.baud_tick, 1'b0);
@@ -119,7 +119,7 @@ module baud_rate_gen_unit_test;
     `SVTEST(baud_div_zero_ticks_every_cycle)
         cb.baud_div     <= 15'd0;   // baud_div_q already 0 from setup
         cb.baud_gen_en  <= 1;
-        ##1;
+        ##2;                        // tick fires at cycle 1; +1 to read that cycle's result
         `FAIL_UNLESS_EQUAL(cb.baud_tick, 1'b1);
         ##1;
         `FAIL_UNLESS_EQUAL(cb.baud_tick, 1'b1);
@@ -134,7 +134,7 @@ module baud_rate_gen_unit_test;
         cb.baud_gen_en  <= 1;
         ##5;                        // mid-count
         cb.baud_gen_en  <= 0;
-        ##1;
+        ##2;                        // disable takes effect at next cycle; +1 to read that result
         `FAIL_UNLESS_EQUAL(cb.baud_cnt, 15'd0);
     `SVTEST_END
 
@@ -145,7 +145,7 @@ module baud_rate_gen_unit_test;
         cb.baud_gen_en  <= 1;
         ##3;                        // mid-count
         rst = 1;
-        ##1;
+        ##2;                        // reset takes effect at next cycle; +1 to read that result
         `FAIL_UNLESS_EQUAL(cb.baud_tick, 1'b0);
         `FAIL_UNLESS_EQUAL(cb.baud_cnt,  15'd0);
     `SVTEST_END

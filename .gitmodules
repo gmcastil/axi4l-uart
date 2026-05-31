@@ -1,3 +1,6 @@
 [submodule "extern/verif"]
 	path = extern/verif
 	url = git@personal:gmcastil/verif
+[submodule "extern/svunit"]
+	path = extern/svunit
+	url = git@personal:svunit/svunit

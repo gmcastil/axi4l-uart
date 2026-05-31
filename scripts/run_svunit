@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# Sets up the SVUnit environment (e.g., path, vars)
+_scripts_dir="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
+if ! source "${_scripts_dir}/common.sh"; then
+    builtin printf 'Error: %s\n' "Could not source common.sh script" >&2
+    exit 1
+fi
+
+command -v runSVUnit >/dev/null 2>&1 ||
+    { log_err "Could not find runSVUnit. Check the PATH."; exit 1; }
+
+runSVUnit "$@"

@@ -1,0 +1,90 @@
+#!/usr/bin/python3
+
+import re
+import sys
+from pathlib import Path
+from typing import Optional
+
+LABEL_COL = 28
+SUITE_INDENT = 2
+
+SUMMARY_RE = re.compile(r"\]:\s+(PASSED|FAILED)\s+\((\d+) of (\d+) tests passing\)")
+
+
+def parse_run_log(run_log: Path) -> Optional[tuple[str, int, int]]:
+    """Return (status, n, m) from the SVUnit testcase summary line, or None."""
+    for line in reversed(run_log.read_text().splitlines()):
+        m = SUMMARY_RE.search(line)
+        if m:
+            return m.group(1), int(m.group(2)), int(m.group(3))
+    return None
+
+
+def summarize(tests_dir: Path) -> None:
+    first = True
+    for component_dir in sorted(tests_dir.iterdir()):
+        if not component_dir.is_dir():
+            continue
+
+        suites_total = 0
+        suites_passing = 0
+        suite_lines = []
+
+        for suite_dir in sorted(component_dir.iterdir()):
+            if not suite_dir.is_dir():
+                continue
+            run_log = suite_dir / "run.log"
+            if not run_log.exists():
+                continue
+
+            suite = suite_dir.name
+            suites_total += 1
+            result = parse_run_log(run_log)
+
+            label = " " * SUITE_INDENT + suite
+            pad = LABEL_COL - len(label)
+
+            if result is None:
+                suite_lines.append(f'{label}{" " * pad}  no results')
+            else:
+                status, n, m = result
+                if status == "PASSED":
+                    suites_passing += 1
+                    suite_lines.append(f'{label}{" " * pad}  {n} / {m} tests passing')
+                else:
+                    suite_lines.append(
+                        f'{label}{" " * pad}  {n} / {m} tests passing  FAILED'
+                    )
+
+        if suites_total == 0:
+            continue
+
+        if not first:
+            print()
+        first = False
+
+        component = component_dir.name
+        pad = LABEL_COL - len(component)
+        print(
+            f'{component}{" " * pad}  {suites_passing} / {suites_total} suites passing'
+        )
+        for line in suite_lines:
+            print(line)
+
+
+def main(args: list[str]) -> int:
+    if len(args) != 2:
+        print(f"Usage: {args[0]} <tests-dir>", file=sys.stderr)
+        return 1
+
+    tests_dir = Path(sys.argv[1])
+    if not tests_dir.is_dir():
+        print(f"Error: {args[1]} is not a directory", file=sys.stderr)
+        return 1
+
+    summarize(tests_dir)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
