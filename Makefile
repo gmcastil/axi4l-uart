@@ -30,7 +30,6 @@ help:
 	$(call print_help_entry, "test", "Run all SVUnit unit test suites")
 	$(call print_help_entry, "integration-test", "Run all integration tests via pytest")
 	$(call print_help_entry, "ctags", "Regenerate ctags for SystemVerilog sources")
-	$(call print_help_entry, "file-list", "Regenerate verible.filelist for the LSP")
 	$(call print_help_entry, "check-ascii", "Check source tree for non-ASCII characters")
 	$(call print_help_entry, "clean", "Remove build artifacts and venv")
 	$(call print_help_entry, "test-clean", "Remove unit test build artifacts only")

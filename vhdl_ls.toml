@@ -1,0 +1,23 @@
+[project]
+name = "AXI4-Lite UART"
+libraries = ["work"]
+
+# Supported standards are 1993, 2008, and 2019
+standard = "1993"
+
+[config]
+project.scope = "open"  # default is "closed"
+
+[libraries]
+work.files = [
+	"baud_rate_gen.vhd"
+]
+
+UNISIM.files = [
+  "/tools/Xilinx/Vivado/2024.2/data/vhdl/src/unisims/unisim_VCOMP.vhd"
+]
+UNISIM.is_third_party = true
+
+xpm.files = [ ]
+xpm.is_third_party = true
+

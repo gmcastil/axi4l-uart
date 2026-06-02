@@ -1,3 +1,17 @@
+--
+-- Module:      baud_rate_gen
+-- Description: Divides the system clock to produce a one-cycle-wide baud rate tick
+--
+-- Purpose:
+--   Generates a periodic one-clock-wide pulse (baud_tick) at the configured baud
+--   rate. This is used as the timing source for uart_tx and uart_rx
+--
+-- Usage:
+--   Instantiated in the top level uart_core
+--
+-- Notes:
+--
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
