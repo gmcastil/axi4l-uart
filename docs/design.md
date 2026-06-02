@@ -226,7 +226,173 @@ Three interrupt sources feed into `uart_ctrl` from `uart_core`:
 The single `irq` output is the OR of all `(ISR & IER)` bits. The PS interrupt
 controller receives this line.
 
-Register map: TBD.
+### Register Map
+
+`uart_ctrl` decodes a 5-bit word index presented by `axi4l_regs` on `reg_addr`.
+Each index corresponds to one 32-bit register. `axi4l_regs` strips the AXI byte
+offset before presenting the address; `uart_ctrl` never sees raw byte addresses.
+Indices 17-31 are unmapped and return SLVERR.
+
+| Index | Name     | Access  | Description                        |
+|-------|----------|---------|------------------------------------|
+| 0     | CTRL     | R/W     | Global control                     |
+| 1     | LCR      | R/W     | Line (frame format) control        |
+| 2     | BAUD     | R/W     | Baud rate divisor                  |
+| 3     | TXSTAT   | RO      | TX status                          |
+| 4     | RXSTAT   | RO/W1C  | RX status                          |
+| 5     | TXD      | WO      | TX data (writes to TX FIFO)        |
+| 6     | RXD      | RO      | RX data (reads from RX FIFO)       |
+| 7     | IER      | R/W     | Interrupt enable                   |
+| 8     | ISR      | W1C     | Interrupt status                   |
+| 9     | RXTHR    | R/W     | RX FIFO interrupt threshold        |
+| 10    | RXTOUT   | R/W     | RX timeout                         |
+| 11    | TXLVL    | RO      | TX FIFO fill level                 |
+| 12    | RXLVL    | RO      | RX FIFO fill level                 |
+| 13    | TX_CNT   | RO      | TX frame counter                   |
+| 14    | RX_CNT   | RO      | RX frame counter                   |
+| 15    | DROP_CNT | RO      | RX drop counter                    |
+| 16    | SCRATCH  | R/W     | Scratch                            |
+
+#### CTRL (index 0) -- R/W
+
+| Bits   | Field         | Description                                                         |
+|--------|---------------|---------------------------------------------------------------------|
+| [0]    | baud_gen_en   | Enable baud rate generator. Must be 0 when changing baud_div.       |
+| [1]    | sw_reset      | Self-clearing. Write 1 to assert synchronous reset to uart_core for one clock cycle. Reads as 0. |
+| [2]    | loopback      | Muxes tx output back to rx input of uart_rx, bypassing external serial lines. |
+| [3]    | tx_fifo_flush | Self-clearing. Write 1 to flush the TX FIFO. Reads as 0.            |
+| [4]    | rx_fifo_flush | Self-clearing. Write 1 to flush the RX FIFO. Reads as 0.            |
+| [31:5] | --            | Reserved, reads as 0.                                               |
+
+#### LCR (index 1) -- R/W
+
+| Bits   | Field      | Description                                                   |
+|--------|------------|---------------------------------------------------------------|
+| [1:0]  | data_bits  | 00=5, 01=6, 10=7, 11=8 data bits per frame.                   |
+| [2]    | parity_en  | Enable parity bit.                                            |
+| [3]    | parity_odd | 0=even parity, 1=odd parity. Ignored when parity_en=0.        |
+| [4]    | stop_bits  | 0=1 stop bit, 1=2 stop bits.                                  |
+| [31:5] | --         | Reserved, reads as 0.                                         |
+
+#### BAUD (index 2) -- R/W
+
+| Bits    | Field    | Description                                                        |
+|---------|----------|--------------------------------------------------------------------|
+| [14:0]  | baud_div | Baud rate divisor. Formula: baud_div = (f_clk / (baud_rate * 16)) - 1. Must not be changed while baud_gen_en is asserted. |
+| [31:15] | --       | Reserved, reads as 0.                                              |
+
+#### TXSTAT (index 3) -- RO
+
+| Bits   | Field    | Description                                                         |
+|--------|----------|---------------------------------------------------------------------|
+| [0]    | tx_full  | TX FIFO is full. Driver must not write TXD when asserted.           |
+| [1]    | tx_empty | TX FIFO is empty.                                                   |
+| [2]    | tx_busy  | Serializer is actively shifting a frame. tx_empty AND NOT tx_busy indicates the line is truly idle; required for tcdrain(). |
+| [31:3] | --       | Reserved, reads as 0.                                               |
+
+#### RXSTAT (index 4) -- RO / W1C
+
+| Bits   | Field      | Access | Description                                                    |
+|--------|------------|--------|----------------------------------------------------------------|
+| [0]    | rx_empty   | RO     | RX FIFO is empty.                                              |
+| [1]    | rx_break   | RO     | Line is currently in break. Asserts when break is confirmed; deasserts when rx returns high. |
+| [2]    | rx_overrun | W1C    | Set when a received byte was dropped due to a full RX FIFO. Write 1 to clear. |
+| [31:3] | --         | RO     | Reserved, reads as 0.                                          |
+
+#### TXD (index 5) -- WO
+
+| Bits   | Field | Description                                                              |
+|--------|-------|--------------------------------------------------------------------------|
+| [7:0]  | data  | Write byte to TX FIFO. Silently dropped if tx_full is asserted.          |
+| [31:8] | --    | Ignored on write.                                                        |
+
+#### RXD (index 6) -- RO
+
+| Bits    | Field       | Description                                                       |
+|---------|-------------|-------------------------------------------------------------------|
+| [7:0]   | data        | Received byte.                                                    |
+| [8]     | framing_err | Stop bit was 0 and at least one other received bit was 1.         |
+| [9]     | parity_err  | Received parity did not match expected parity.                    |
+| [10]    | break       | Break: stop bit 0 and all data/parity bits 0. Data byte is 0x00. |
+| [31:11] | --          | Reserved, reads as 0.                                             |
+
+Each read pops one entry from the RX FIFO. Reading when rx_empty is asserted
+returns SLVERR.
+
+#### IER (index 7) -- R/W
+
+| Bits   | Field           | Description                                           |
+|--------|-----------------|-------------------------------------------------------|
+| [0]    | tx_empty_en     | Enable TX empty interrupt.                            |
+| [1]    | rx_not_empty_en | Enable RX threshold interrupt.                        |
+| [2]    | rx_error_en     | Enable RX error interrupt.                            |
+| [3]    | rx_timeout_en   | Enable RX timeout interrupt.                          |
+| [31:4] | --              | Reserved, reads as 0.                                 |
+
+#### ISR (index 8) -- W1C
+
+| Bits   | Field            | Description                                                       |
+|--------|------------------|-------------------------------------------------------------------|
+| [0]    | irq_tx_empty     | TX FIFO became empty.                                             |
+| [1]    | irq_rx_not_empty | RX FIFO fill level reached RXTHR.                                 |
+| [2]    | irq_rx_error     | RX error: framing, parity, break, or overrun.                     |
+| [3]    | irq_rx_timeout   | RX FIFO non-empty and no new byte received within RXTOUT baud ticks. |
+| [31:4] | --               | Reserved, reads as 0.                                             |
+
+Bits are cleared by writing 1; writing 0 has no effect. The irq output is the
+OR of all (ISR & IER) bits.
+
+#### RXTHR (index 9) -- R/W
+
+| Bits    | Field     | Description                                                       |
+|---------|-----------|-------------------------------------------------------------------|
+| [9:0]   | threshold | RX FIFO fill level at which irq_rx_not_empty is set. Range 1-1024. Value 0 disables the threshold interrupt. |
+| [31:10] | --        | Reserved, reads as 0.                                             |
+
+#### RXTOUT (index 10) -- R/W
+
+| Bits    | Field   | Description                                                         |
+|---------|---------|---------------------------------------------------------------------|
+| [15:0]  | timeout | Timeout in baud ticks. Counter resets on each received byte. If the RX FIFO is non-empty and no new byte arrives within this many baud ticks, irq_rx_timeout is set. Value 0 disables the timeout interrupt. |
+| [31:16] | --      | Reserved, reads as 0.                                               |
+
+#### TXLVL (index 11) -- RO
+
+| Bits    | Field | Description                             |
+|---------|-------|-----------------------------------------|
+| [10:0]  | level | Current number of bytes in the TX FIFO. |
+| [31:11] | --    | Reserved, reads as 0.                   |
+
+#### RXLVL (index 12) -- RO
+
+| Bits    | Field | Description                             |
+|---------|-------|-----------------------------------------|
+| [9:0]   | level | Current number of bytes in the RX FIFO. |
+| [31:10] | --    | Reserved, reads as 0.                   |
+
+#### TX_CNT (index 13) -- RO
+
+| Bits   | Field          | Description                                       |
+|--------|----------------|---------------------------------------------------|
+| [31:0] | tx_frame_count | Transmitted frame count. Wraps on overflow.       |
+
+#### RX_CNT (index 14) -- RO
+
+| Bits   | Field          | Description                                                            |
+|--------|----------------|------------------------------------------------------------------------|
+| [31:0] | rx_frame_count | Error-free frames received and written to RX FIFO. Wraps on overflow. |
+
+#### DROP_CNT (index 15) -- RO
+
+| Bits   | Field         | Description                                                           |
+|--------|---------------|-----------------------------------------------------------------------|
+| [31:0] | rx_drop_count | Error-free frames dropped due to RX FIFO full. Wraps on overflow.    |
+
+#### SCRATCH (index 16) -- R/W
+
+| Bits   | Field | Description           |
+|--------|-------|-----------------------|
+| [31:0] | data  | No hardware function. |
 
 ---
 
@@ -398,8 +564,9 @@ rx_data    : out std_logic_vector(10 downto 0);
 rx_wr_en   : out std_logic;
 rx_full    : in  std_logic;
 
--- overrun strobe and diagnostic counters
+-- overrun strobe, break level, and diagnostic counters
 rx_overrun     : out std_logic;
+rx_break       : out std_logic;
 rx_frame_count : out unsigned(31 downto 0);
 rx_drop_count  : out unsigned(31 downto 0)
 ```
@@ -452,4 +619,5 @@ ready to write. The byte is dropped and `rx_overrun` is pulsed for one cycle.
 - **URX-013** -- A synchronous reset shall return the receiver to idle with `rx_wr_en` and `rx_overrun` both 0.
 - **URX-014** -- `uart_rx` shall maintain a 32-bit received frame count (`rx_frame_count`) that increments by 1 each time a complete, error-free frame is successfully written to the FIFO (`rx_wr_en` asserted with `rx_data[10:8]` all zero). Dropped frames, errored frames, and glitch-rejected starts shall not increment this counter. The counter wraps on overflow and resets to 0 on synchronous reset.
 - **URX-015** -- `uart_rx` shall maintain a 32-bit dropped frame count (`rx_drop_count`) that increments by 1 each time a complete, error-free frame is discarded because `rx_full` is asserted when the byte is ready. Errored frames and glitch-rejected starts shall not increment this counter. The counter wraps on overflow and resets to 0 on synchronous reset.
+- **URX-016** -- `uart_rx` shall assert `rx_break` on the cycle that a break condition is confirmed (the same cycle `rx_wr_en` is asserted with the null byte). `rx_break` shall remain asserted until the synchronised `rx` input returns to 1, at which point `rx_break` shall deassert and the receiver shall resume start-bit detection. `rx_break` shall be 0 on synchronous reset.
 
