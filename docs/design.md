@@ -35,7 +35,7 @@ graph LR
     CTRL -->|frame cfg| UTX
     CTRL -->|frame cfg| URX
     CTRL -->|tx_data\ntx_wr_en| TXFIFO
-    TXFIFO -->|tx_full| CTRL
+    TXFIFO -->|tx_full\ntx_empty| CTRL
     UTX -->|tx_busy| CTRL
     RXFIFO -->|rx_data 12b\nrx_empty| CTRL
     CTRL -->|rx_rd_en| RXFIFO
@@ -47,6 +47,7 @@ graph LR
     RXFIFO -->|rx_full| URX
     UTX --> TX
     RX --> URX
+    CTRL -->|irq| IRQ((irq))
 ```
 
 ---
@@ -133,6 +134,23 @@ Received error conditions map directly to Linux tty layer flags:
 | `rx_overrun`      | `TTY_OVERRUN`  |
 | `rx_break`        | `TTY_BREAK`    |
 
+### Interrupt Handling
+
+The UART presents a single interrupt line to the PS interrupt controller. The
+driver's ISR reads the Interrupt Status Register (ISR) to determine which
+source fired, handles each active source, and clears the handled bits by
+writing 1 to the corresponding ISR bits (write-1-to-clear).
+
+| ISR bit           | Action                                              |
+|-------------------|-----------------------------------------------------|
+| `irq_tx_empty`    | Refill TX FIFO from serial core circular buffer     |
+| `irq_rx_not_empty`| Drain RX FIFO, push bytes to tty layer             |
+| `irq_rx_error`    | Read and report error byte from RX FIFO to tty layer|
+
+Individual sources are masked via the Interrupt Enable Register (IER). The
+driver enables all three sources during `startup` and disables them during
+`shutdown`.
+
 ### Hardware Assumptions and Requirements
 
 The following constraints are placed on the driver by the hardware design:
@@ -184,7 +202,27 @@ reg_err   : out std_logic;
 UART-specific control and status logic. Implements the register bus interface
 on one side and drives/reads all control and status signals into `uart_core` on
 the other. Handles illegal accesses (unmapped addresses, RO write violations)
-and generates interrupt signals for the driver.
+and generates the single interrupt output for the driver.
+
+### Interrupts
+
+Three interrupt sources feed into `uart_ctrl` from `uart_core`:
+
+| Source            | Condition                        |
+|-------------------|----------------------------------|
+| `irq_tx_empty`    | TX FIFO became empty             |
+| `irq_rx_not_empty`| RX FIFO is not empty             |
+| `irq_rx_error`    | RX error flag set in RX FIFO entry (framing, parity, overrun, or break) |
+
+`uart_ctrl` implements two interrupt registers:
+
+- **Interrupt Enable Register (IER)** -- one bit per source; gates whether a
+  source contributes to the interrupt output
+- **Interrupt Status Register (ISR)** -- one bit per source; set when the
+  condition occurs, cleared by writing 1 to the bit (write-1-to-clear)
+
+The single `irq` output is the OR of all `(ISR & IER)` bits. The PS interrupt
+controller receives this line.
 
 Register map: TBD.
 
