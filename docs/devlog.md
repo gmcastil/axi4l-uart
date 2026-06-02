@@ -54,3 +54,97 @@ None.
 3. Move on to `uart_tx` unit tests once `baud_rate_gen` is signed off
 
 ---
+
+## Session 2 - 2026-06-02
+
+### What Was Decided
+
+- **Module header comment template established.**
+  Format: Module, Description, Purpose, Usage, Notes. No horizontal rules. No
+  Ports or Generics sections -- those are documented inline on each port/generic
+  declaration. Header added to `baud_rate_gen.vhd`.
+
+- **`baud_rate_gen` reviewed and left unchanged.**
+  The registered `baud_div` input (`baud_div_q`) adds a one-cycle-ahead
+  requirement but is harmless in practice since AXI transactions provide ample
+  setup time. 15-bit width covers 9600 baud and above at 100 MHz -- sufficient
+  for the intended use case. No RTL changes needed.
+
+- **`baud_gen_en` is a global software enable, not a per-frame signal.**
+  Driven from a control register. The generator runs continuously while
+  asserted. TX and RX consume ticks whenever they have work to do.
+
+- **`baud_rate_gen` runs at 16x the baud rate.**
+  `uart_rx` uses the tick directly for oversampling. `uart_tx` counts 16 ticks
+  per bit internally. The driver computes
+  `baud_div = (f_clk / (baud_rate * 16)) - 1` from the clock frequency read
+  from the device tree. `baud_div` must not be changed while the core is
+  enabled -- software enforces this by disabling before changing.
+
+- **Top-level hierarchy defined.**
+  `uart_top` = `axi4l_regs` + `uart_ctrl` + `uart_core`. `uart_core` =
+  `baud_rate_gen` + `uart_tx` + `uart_rx` + TX FIFO + RX FIFO. FIFOs live
+  inside `uart_core`, external to `uart_tx` and `uart_rx`. `uart_core` has no
+  knowledge of the AXI register interface.
+
+- **`axi4l_regs` is a generic reusable AXI4-Lite slave.**
+  Presents a decoded register bus: `reg_addr`, `reg_wdata`, `reg_wren`,
+  `reg_be`, `reg_rdata`, `reg_req`, `reg_ack`, `reg_err`. `reg_ack` and
+  `reg_err` are registered (1-cycle latency). `ack=1, err=0` = OKAY;
+  `ack=1, err=1` = SLVERR. `reg_be` only meaningful on writes.
+
+- **`uart_ctrl` is the UART-specific control and status module.**
+  Register bus on one side, control/status signals on the other. Owns the
+  interrupt enable and status registers. Drives the single `irq` output.
+
+- **`uart_tx` interface settled.**
+  Inputs: `baud_tick`, frame config (`data_bits`, `parity_en`, `parity_odd`,
+  `stop_bits`), TX FIFO read port (`tx_data`, `tx_empty`, `tx_rd_en`).
+  Outputs: `tx`, `tx_busy`. Frame config is registered at the start of each
+  frame -- changes take effect on the next frame. `tx_busy` remains asserted
+  until the stop bit has been sent; required for correct `tcdrain()` behavior.
+
+- **`uart_rx` interface settled.**
+  Inputs: `baud_tick`, frame config (same as TX), `rx`, `rx_full`. Outputs:
+  `rx_data` (12-bit packed), `rx_wr_en`. Start bit validated at oversample
+  tick 8. Each bit sampled at tick 8 (mid-bit). Frame config registered at
+  frame start. Error recovery: parity/overrun returns to idle immediately;
+  framing error/break waits for line to go high first.
+
+- **RX FIFO is 12 bits wide.**
+  Bit packing: `[11]=break, [10]=overrun, [9]=parity_err, [8]=framing_err,
+  [7:0]=data`. Per-byte error association required for correct use of
+  `tty_insert_flip_char()` in the Linux driver. TX FIFO remains 8 bits.
+
+- **Interrupt architecture defined.**
+  Three sources: `irq_tx_empty`, `irq_rx_not_empty`, `irq_rx_error`. Masked
+  by Interrupt Enable Register (IER). Status held in Interrupt Status Register
+  (ISR, write-1-to-clear). Single `irq` output is OR of (ISR & IER). PS
+  interrupt controller receives the single line.
+
+- **DMA deferred.**
+  Not needed for UART baud rates. Will be learned on the HDMI core project
+  where it is actually required.
+
+- **Kernel driver will live in the Arty-Z7 repository, not this one.**
+  That repo owns kernel and U-Boot source as externals, plus device tree,
+  FSBL, and boot file generation.
+
+- **`docs/design.md` created.**
+  Contains full architecture, block diagram, module interfaces, software
+  requirements, and driver constraints.
+
+### Open Design Decisions
+
+- FIFO depth: TBD (will fall out of Xilinx primitive selection)
+- `uart_core` external port list: TBD
+- `uart_ctrl` register map: TBD
+- `uart_sync_fifo` FIFO mode (FWFT vs standard): deferred to TX+FIFO integration
+
+### Next Steps
+
+1. Write requirements for `baud_rate_gen`, `uart_tx`, and `uart_rx`
+2. Define `uart_core` external interface
+3. Begin `uart_tx` RTL and unit tests
+
+---
