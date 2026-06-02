@@ -25,7 +25,7 @@ graph LR
             TXFIFO["TX FIFO\n8b"]
             UTX["uart_tx"]
             URX["uart_rx"]
-            RXFIFO["RX FIFO\n12b"]
+            RXFIFO["RX FIFO\n11b"]
         end
     end
 
@@ -37,13 +37,14 @@ graph LR
     CTRL -->|tx_data\ntx_wr_en| TXFIFO
     TXFIFO -->|tx_full\ntx_empty| CTRL
     UTX -->|tx_busy| CTRL
-    RXFIFO -->|rx_data 12b\nrx_empty| CTRL
+    URX -->|rx_overrun| CTRL
+    RXFIFO -->|rx_data 11b\nrx_empty| CTRL
     CTRL -->|rx_rd_en| RXFIFO
     BRG -->|baud_tick| UTX
     BRG -->|baud_tick| URX
     TXFIFO -->|tx_data 8b\ntx_empty| UTX
     UTX -->|tx_rd_en| TXFIFO
-    URX -->|rx_data 12b\nrx_wr_en| RXFIFO
+    URX -->|rx_data 11b\nrx_wr_en| RXFIFO
     RXFIFO -->|rx_full| URX
     UTX --> TX
     RX --> URX
@@ -161,7 +162,8 @@ The following constraints are placed on the driver by the hardware design:
 - TX data register writes are dropped if the TX FIFO is full; the driver must
   respect the TX FIFO full status before writing
 - RX overrun occurs in hardware when a received byte cannot be written to a
-  full RX FIFO; the byte is dropped and `rx_overrun` is asserted
+  full RX FIFO; the byte is dropped, `rx_overrun` is pulsed for one cycle,
+  and the event is recorded in a status register visible to the driver
 
 ---
 
@@ -212,7 +214,7 @@ Three interrupt sources feed into `uart_ctrl` from `uart_core`:
 |-------------------|----------------------------------|
 | `irq_tx_empty`    | TX FIFO became empty             |
 | `irq_rx_not_empty`| RX FIFO is not empty             |
-| `irq_rx_error`    | RX error flag set in RX FIFO entry (framing, parity, overrun, or break) |
+| `irq_rx_error`    | RX error flag set in RX FIFO entry (framing, parity, or break), or `rx_overrun` pulsed |
 
 `uart_ctrl` implements two interrupt registers:
 
@@ -233,6 +235,15 @@ Register map: TBD.
 Datapath wrapper. Instantiates `baud_rate_gen`, `uart_tx`, `uart_rx`, and the
 TX and RX FIFOs. External interface presents control and status signals to
 `uart_ctrl` on one side and the serial TX/RX lines on the other.
+
+### Open Items
+
+- **Software reset** -- a register-writable bit in `uart_ctrl` that asserts
+  `rst` to `uart_core`, allowing software to reset the entire datapath without
+  a hardware reset. To be defined during `uart_core` requirements.
+- **Loopback mode** -- a register-writable bit that muxes the `tx` output of
+  `uart_tx` back to the `rx` input of `uart_rx`, bypassing the external serial
+  lines. To be defined during `uart_core` requirements.
 
 ---
 
@@ -259,6 +270,16 @@ Software must disable the core (deassert `baud_gen_en`) before changing
 `baud_div`. This is enforced by convention, not hardware. The Linux serial
 driver satisfies this naturally since `set_termios` is only called when the
 port is quiescent.
+
+### Requirements
+
+- **BRG-001** -- While `baud_gen_en` is deasserted, `baud_tick` shall be 0 and `baud_cnt` shall be 0.
+- **BRG-002** -- When `baud_gen_en` is asserted, the first `baud_tick` shall fire after `baud_div + 1` clock cycles. The value in effect is the `baud_div` presented on the cycle immediately before `baud_gen_en` is asserted, due to one-cycle internal registration.
+- **BRG-003** -- Each `baud_tick` pulse shall be exactly one clock cycle wide.
+- **BRG-004** -- In steady state, `baud_tick` shall fire with a period of exactly `baud_div + 1` clock cycles.
+- **BRG-005** -- When `baud_div = 0`, `baud_tick` shall fire on every clock cycle while `baud_gen_en` is asserted.
+- **BRG-006** -- Deasserting `baud_gen_en` shall suppress `baud_tick` and reset `baud_cnt` to 0 on the next clock edge.
+- **BRG-007** -- A synchronous reset shall clear `baud_tick` to 0 and `baud_cnt` to 0, regardless of `baud_gen_en`.
 
 ---
 
@@ -292,7 +313,10 @@ tx_rd_en   : out std_logic;
 tx         : out std_logic;
 
 -- status
-tx_busy    : out std_logic
+tx_busy        : out std_logic;
+
+-- diagnostic counters
+tx_frame_count : out unsigned(31 downto 0)
 ```
 
 `tx_busy` is asserted whenever the serializer is actively shifting out a frame.
@@ -309,6 +333,21 @@ configuration takes effect on the next frame.
 
 - FIFO mode: FWFT or standard read latency? Deferred to TX+FIFO integration.
 
+### Requirements
+
+- **UTX-001** -- While idle (no frame in progress), `tx` shall be 1 and `tx_busy` shall be 0.
+- **UTX-002** -- Frame configuration (`data_bits`, `parity_en`, `parity_odd`, `stop_bits`) shall be latched at the start of each frame. Changes mid-frame do not affect the frame in progress; the new configuration takes effect on the next frame.
+- **UTX-003** -- When idle and `tx_empty` is deasserted, a new frame shall begin on the next `baud_tick`.
+- **UTX-004** -- A frame shall begin with a start bit: `tx = 0` held for 16 consecutive `baud_tick` pulses.
+- **UTX-005** -- Data bits shall be transmitted LSB-first, one bit per 16 `baud_tick` pulses. The number of data bits is determined by `data_bits`: `00`=5, `01`=6, `10`=7, `11`=8.
+- **UTX-006** -- When `parity_en = 1`, a parity bit shall be transmitted after the last data bit, held for 16 `baud_tick` pulses. When `parity_odd = 0`, even parity is used; when `parity_odd = 1`, odd parity is used.
+- **UTX-007** -- A stop bit (`tx = 1`) shall be transmitted after the last data or parity bit, held for 16 `baud_tick` pulses per stop bit. When `stop_bits = 0`, one stop bit is sent; when `stop_bits = 1`, two stop bits are sent.
+- **UTX-008** -- `tx_busy` shall be asserted from the start of the start bit through the end of the last stop bit. It shall deassert on the clock cycle following the last stop bit tick.
+- **UTX-009** -- When a frame completes and `tx_empty` is deasserted, the next frame shall begin on the immediately following `baud_tick`, with no idle cycle inserted between frames.
+- **UTX-010** -- `tx_rd_en` shall not be asserted while `tx_empty` is asserted. Exact `tx_rd_en` assertion timing is deferred to TX+FIFO integration and depends on FIFO read mode (FWFT vs standard).
+- **UTX-011** -- A synchronous reset shall set `tx` to 1, `tx_busy` to 0, and `tx_rd_en` to 0.
+- **UTX-012** -- `uart_tx` shall maintain a 32-bit transmit frame count (`tx_frame_count`) that increments by 1 on the clock cycle that `tx_busy` deasserts after each transmitted frame. The counter wraps on overflow and resets to 0 on synchronous reset.
+
 ---
 
 ## FIFOs
@@ -316,14 +355,15 @@ configuration takes effect on the next frame.
 Both FIFOs are `uart_sync_fifo` instances wrapping Xilinx FIFO primitives.
 They live inside `uart_core`, external to `uart_tx` and `uart_rx`.
 
-| FIFO    | Width  | Notes                                          |
-|---------|--------|------------------------------------------------|
-| TX FIFO | 8 bits | data only                                      |
-| RX FIFO | 12 bits| [11]=break, [10]=overrun, [9]=parity_err, [8]=framing_err, [7:0]=data |
+| FIFO    | Width   | Notes                                                        |
+|---------|---------|--------------------------------------------------------------|
+| TX FIFO | 8 bits  | data only                                                    |
+| RX FIFO | 11 bits | [10]=break, [9]=parity_err, [8]=framing_err, [7:0]=data      |
 
 Bundling error flags with RX data in the FIFO preserves per-byte error
 association, which is required for correct use of `tty_insert_flip_char()` in
-the Linux driver.
+the Linux driver. Overrun is not a per-byte flag and is not stored in the FIFO;
+it is reported via a separate `rx_overrun` strobe from `uart_rx` to `uart_ctrl`.
 
 FIFO depth: TBD.
 
@@ -353,10 +393,15 @@ stop_bits  : in  std_logic;              -- 0=1 stop bit, 1=2 stop bits
 rx         : in  std_logic;
 
 -- RX FIFO write port
--- rx_data bit packing: [11]=break, [10]=overrun, [9]=parity_err, [8]=framing_err, [7:0]=data
-rx_data    : out std_logic_vector(11 downto 0);
+-- rx_data bit packing: [10]=break, [9]=parity_err, [8]=framing_err, [7:0]=data
+rx_data    : out std_logic_vector(10 downto 0);
 rx_wr_en   : out std_logic;
-rx_full    : in  std_logic
+rx_full    : in  std_logic;
+
+-- overrun strobe and diagnostic counters
+rx_overrun     : out std_logic;
+rx_frame_count : out unsigned(31 downto 0);
+rx_drop_count  : out unsigned(31 downto 0)
 ```
 
 Frame configuration inputs are registered internally at the start of each
@@ -377,12 +422,34 @@ Each bit is sampled at oversample tick 8 (mid-bit). The 16x `baud_tick` from
 
 ### Error Recovery
 
-- **Parity error / overrun** -- frame timing was intact. Error is reported,
-  byte is written to the FIFO (with error flag), and the receiver immediately
+- **Parity error** -- frame timing was intact. The parity error flag is set in
+  the FIFO word, the byte is written to the FIFO, and the receiver immediately
+  returns to hunting for the next start bit.
+- **Overrun** -- the RX FIFO was full when the byte was ready. The byte is
+  discarded, `rx_overrun` is pulsed for one cycle, and the receiver immediately
   returns to hunting for the next start bit.
 - **Framing error / break** -- the stop bit was 0, so the line is still low.
   The receiver waits for `rx` to return high before resuming start bit hunting.
   Jumping straight to the next start bit would produce incorrect frame timing.
 
 Overrun is detected when `rx_full` is asserted at the moment a new byte is
-ready to write. The byte is dropped and `rx_overrun` is asserted.
+ready to write. The byte is dropped and `rx_overrun` is pulsed for one cycle.
+
+### Requirements
+
+- **URX-001** -- The `rx` input shall be synchronised to the system clock using a two-register (2-FF) synchroniser before any processing. All internal logic operates on the synchronised signal.
+- **URX-002** -- While idle, the receiver shall monitor the synchronised `rx` line for a falling edge to detect the start of a start bit.
+- **URX-003** -- On detecting a falling edge on `rx`, the receiver shall reset its oversample counter and wait until the 8th subsequent `baud_tick`. If `rx` is still 0 at tick 8, the start bit is valid and frame reception begins. If `rx` has returned to 1, the edge is a glitch and the receiver returns to idle.
+- **URX-004** -- Frame configuration (`data_bits`, `parity_en`, `parity_odd`, `stop_bits`) shall be latched when a valid start bit is confirmed. Changes mid-frame do not affect the frame in progress.
+- **URX-005** -- Each data bit shall be sampled at tick 8 of its 16-tick oversample window, LSB-first. The number of data bits is determined by `data_bits`: `00`=5, `01`=6, `10`=7, `11`=8.
+- **URX-006** -- When `parity_en = 1`, the parity bit shall be sampled at tick 8 of the parity window. A mismatch against the expected parity shall set `rx_data[9]` (parity_err).
+- **URX-007** -- The stop bit shall be sampled at tick 8 of the stop bit window. If the stop bit is 0, `rx_data[8]` (framing_err) shall be set.
+- **URX-008** -- A break is distinguished from a framing error as follows: if the stop bit is 0 and all data bits are 0 and the parity bit (if enabled) is 0, the condition is a break (`rx_data[10]` set); if the stop bit is 0 and any other received bit is 1, it is a framing error (`rx_data[8]` set, `rx_data[10]` clear).
+- **URX-009** -- When `rx_full` is asserted at the moment a received frame is ready to write, the byte shall be discarded: `rx_wr_en` shall not be asserted and `rx_overrun` shall be pulsed for exactly one clock cycle.
+- **URX-010** -- On a successfully received byte, `rx_wr_en` shall be asserted for one clock cycle with `rx_data` valid. `rx_data[7:0]` contains the received byte; `rx_data[10:8]` contains error flags from the frame.
+- **URX-011** -- On a parity error or overrun, the receiver shall return to idle immediately after the frame completes, without waiting for `rx` to return high.
+- **URX-012** -- On a framing error or break, the receiver shall wait for `rx` to return to 1 before resuming start bit detection.
+- **URX-013** -- A synchronous reset shall return the receiver to idle with `rx_wr_en` and `rx_overrun` both 0.
+- **URX-014** -- `uart_rx` shall maintain a 32-bit received frame count (`rx_frame_count`) that increments by 1 each time a complete, error-free frame is successfully written to the FIFO (`rx_wr_en` asserted with `rx_data[10:8]` all zero). Dropped frames, errored frames, and glitch-rejected starts shall not increment this counter. The counter wraps on overflow and resets to 0 on synchronous reset.
+- **URX-015** -- `uart_rx` shall maintain a 32-bit dropped frame count (`rx_drop_count`) that increments by 1 each time a complete, error-free frame is discarded because `rx_full` is asserted when the byte is ready. Errored frames and glitch-rejected starts shall not increment this counter. The counter wraps on overflow and resets to 0 on synchronous reset.
+

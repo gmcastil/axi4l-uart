@@ -144,7 +144,80 @@ None.
 ### Next Steps
 
 1. Write requirements for `baud_rate_gen`, `uart_tx`, and `uart_rx`
-2. Define `uart_core` external interface
+2. Define `uart_core` external port list
+3. Define `uart_ctrl` register map (follows naturally from requirements)
+4. Begin `uart_tx` RTL and unit tests
+
+---
+
+## Session 3 - 2026-06-02
+
+### What Was Decided
+
+- **Requirement ID format adopted.**
+  IDs are module-prefixed and sequential: `BRG-NNN`, `UTX-NNN`, `URX-NNN`.
+  Requirements live as subsections in `docs/design.md` under each module.
+
+- **RX FIFO narrowed from 12 to 11 bits.**
+  Overrun removed from the FIFO word. Overrun is not a per-byte condition --
+  it means a byte was lost and never reached the FIFO -- so it has no business
+  being in the FIFO data word. New packing: `[10]=break, [9]=parity_err,
+  [8]=framing_err, [7:0]=data`.
+
+- **`rx_overrun` strobe added as a dedicated output on `uart_rx`.**
+  One-cycle pulse when a received frame is dropped due to a full FIFO.
+  `uart_ctrl` latches it into a status register. Driver sees it via
+  `irq_rx_error`. This replaces the removed FIFO bit entirely.
+
+- **Break detection: all-zeros heuristic.**
+  If stop bit = 0 AND all data bits = 0 AND parity bit (if enabled) = 0,
+  it is a break (`rx_data[10]`). If stop bit = 0 with any other bit = 1,
+  it is a framing error (`rx_data[8]`). Matches 8250/16550 convention and
+  what `uart_handle_break()` in the Linux serial framework expects.
+
+- **32-bit diagnostic frame counters added.**
+  `uart_tx`: `tx_frame_count` -- increments when `tx_busy` deasserts.
+  `uart_rx`: `rx_frame_count` -- increments on error-free frames written to
+  FIFO. `rx_drop_count` -- increments on error-free frames dropped due to
+  overrun. All wrap on overflow, reset to zero on synchronous reset, and are
+  software-readable. Glitch-rejected starts are not counted anywhere.
+  A received frame is complete, error-free, and successfully written to the
+  FIFO. A dropped frame is complete, error-free, and could not be written.
+
+- **`uart_rx` owns the 2-FF input synchronizer.**
+  The `rx` pin connects directly to `uart_rx` (via IBUF). The synchronizer
+  is internal to `uart_rx`; all internal logic operates on the synchronised
+  signal.
+
+- **Software reset and loopback deferred to `uart_core`.**
+  Both are `uart_core`-level concerns noted as open items in `design.md`.
+  Software reset: a register bit in `uart_ctrl` that asserts `rst` to
+  `uart_core`. Loopback: a register bit that muxes `tx` back to the `rx`
+  input of `uart_rx`.
+
+### What Was Done
+
+- **Requirements written for all three modules.**
+  `design.md` updated with Requirements subsections: BRG-001..007,
+  UTX-001..012, URX-001..015. UTX-010 (`tx_rd_en` timing) marked deferred
+  pending FIFO mode decision.
+
+- **`design.md` updated throughout for 11-bit RX FIFO.**
+  Block diagram, FIFO table, interface blocks, error recovery prose, and
+  interrupt source table all updated. `uart_core` Open Items section added.
+
+### Open Design Decisions
+
+- FIFO depth: TBD (Xilinx primitive selection)
+- `uart_core` external port list: TBD
+- `uart_ctrl` register map: TBD
+- `uart_sync_fifo` FIFO mode (FWFT vs standard): deferred to TX+FIFO integration
+- `tx_rd_en` assertion timing (UTX-010): deferred to TX+FIFO integration
+
+### Next Steps
+
+1. Define `uart_core` external port list
+2. Define `uart_ctrl` register map
 3. Begin `uart_tx` RTL and unit tests
 
 ---
