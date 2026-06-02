@@ -35,9 +35,9 @@ graph LR
     CTRL -->|frame cfg| UTX
     CTRL -->|frame cfg| URX
     CTRL -->|tx_data\ntx_wr_en| TXFIFO
-    CTRL <--|tx_full| TXFIFO
-    CTRL <--|tx_busy| UTX
-    CTRL <--|rx_data 12b\nrx_empty| RXFIFO
+    TXFIFO -->|tx_full| CTRL
+    UTX -->|tx_busy| CTRL
+    RXFIFO -->|rx_data 12b\nrx_empty| CTRL
     CTRL -->|rx_rd_en| RXFIFO
     BRG -->|baud_tick| UTX
     BRG -->|baud_tick| URX
