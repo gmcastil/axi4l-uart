@@ -1,4 +1,4 @@
-  AXI4-Lite UART Development Log
+AXI4-Lite UART Development Log
 
 ---
 
@@ -254,5 +254,92 @@ None beyond those carried from Session 3.
 ### Next Steps
 
 Same as Session 3.
+
+---
+
+## Session 5 - 2026-06-02
+
+### What Was Decided
+
+- **`uart_ctrl` register map defined.**
+  17 registers, word-indexed (0-16). `axi4l_regs` strips the AXI byte offset
+  and presents a 5-bit word index to `uart_ctrl`. Indices 17-31 return SLVERR.
+  Full register map documented in `docs/design.md` under `uart_ctrl`.
+
+- **All signals across module boundaries are now known.**
+  `uart_core` is a pure datapath -- no knowledge of thresholds, timeouts, or
+  interrupts. All interrupt decision logic lives in `uart_ctrl`.
+  `uart_core` exposes two new signals to `uart_ctrl`: `baud_tick` (from
+  `baud_rate_gen`, used for timeout counting) and `rx_received` (one-cycle
+  pulse when a byte lands in the RX FIFO, used to reset the timeout counter).
+  `rxthr` and `rxtout` do not pass into `uart_core`.
+  `uart_core` has two reset inputs: `rst` (hardware reset from top level) and
+  `sw_rst` (one-cycle pulse from `uart_ctrl` when CTRL[8] is written).
+  Software reset is a separate pin from hardware reset.
+
+- **Break stays in the RX FIFO as a null byte.**
+  On break detection, `uart_rx` pushes one null byte with `rx_data[10]` set,
+  then stalls until `rx` returns high. This preserves byte-stream ordering,
+  consistent with 16550 convention. Break is not pushed repeatedly while the
+  line stays low -- one entry, then stall.
+
+- **`rx_break` level output added to `uart_rx` interface.**
+  Asserts on the same cycle `rx_wr_en` fires for the null byte. Remains
+  asserted until `rx` returns high. `uart_ctrl` exposes it as a readable status
+  bit in RXSTAT[1]. URX-016 written to `design.md`.
+
+- **FIFO depths resolved by primitive choice.**
+  TX FIFO: FIFO18E1 in 9-bit mode = 2048 x 9 (8-bit data, 1 bit unused).
+  RX FIFO: FIFO18E1 in 18-bit mode = 1024 x 18 (11-bit data, 7 bits unused).
+  "FIFO depth: TBD" open item is closed.
+
+- **RX threshold interrupt added (RXTHR, index 9).**
+  `irq_rx_not_empty` fires when RX FIFO fill level >= threshold. Value 0
+  disables the interrupt. Avoids interrupting on every received byte, which
+  would be expensive on a 32-bit ARM processor at sustained baud rates.
+
+- **RX timeout interrupt added (RXTOUT, index 10).**
+  Fires when the RX FIFO is non-empty and no new byte has arrived within the
+  configured number of baud ticks. Software-configurable. Value 0 disables.
+  Mandatory companion to the threshold: without it, a burst that stops short
+  of the threshold would stall in the FIFO indefinitely. Timeout unit is baud
+  ticks; software computes the desired timeout from the baud rate.
+
+- **RX and TX fill level registers added (RXLVL index 12, TXLVL index 11).**
+  Expose the FIFO DATA_COUNT output from the Xilinx primitive. Hardware has
+  this signal anyway; exposing it lets the driver read or write the exact number
+  of bytes available in one shot rather than polling empty/full per byte.
+  TXLVL is 11 bits (0-2048); RXLVL is 10 bits (0-1024).
+
+- **FIFO flush bits added to CTRL (byte 2).**
+  CTRL[16]=`tx_fifo_flush`, CTRL[17]=`rx_fifo_flush`. Both self-clearing.
+  Allows the driver to flush either FIFO independently without a full software
+  reset.
+
+- **`rx_overrun` sticky status bit added to RXSTAT[8] (W1C).**
+  Complements the `irq_rx_error` interrupt source. Allows the driver to
+  determine specifically that an overrun occurred, independent of whether
+  interrupts were enabled at the time.
+
+- **Scratch register added (index 16).**
+  No hardware function. Useful for register interface bringup and testing.
+
+- **Register bit spacing convention adopted.**
+  Bits are byte-aligned by functional group rather than packed into the lowest
+  positions. CTRL: byte 0 = run/mode, byte 1 = reset, byte 2 = flushes.
+  RXSTAT: byte 0 = FIFO/line state (RO), byte 1 = error flags (W1C).
+  IER/ISR: byte 0 = TX interrupt, byte 1 = RX interrupts. IER and ISR mirror
+  each other so (ISR & IER) masking works at the byte level.
+
+### Open Design Decisions
+
+- `uart_core` external port list: TBD
+- `uart_sync_fifo` FIFO mode (FWFT vs standard): deferred to TX+FIFO integration
+- UTX-010 (`tx_rd_en` assertion timing): deferred to TX+FIFO integration
+
+### Next Steps
+
+1. Define `uart_core` external port list
+2. Begin `uart_tx` RTL and unit tests
 
 ---

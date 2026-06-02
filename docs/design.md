@@ -255,14 +255,16 @@ Indices 17-31 are unmapped and return SLVERR.
 
 #### CTRL (index 0) -- R/W
 
-| Bits   | Field         | Description                                                         |
-|--------|---------------|---------------------------------------------------------------------|
-| [0]    | baud_gen_en   | Enable baud rate generator. Must be 0 when changing baud_div.       |
-| [1]    | sw_reset      | Self-clearing. Write 1 to assert synchronous reset to uart_core for one clock cycle. Reads as 0. |
-| [2]    | loopback      | Muxes tx output back to rx input of uart_rx, bypassing external serial lines. |
-| [3]    | tx_fifo_flush | Self-clearing. Write 1 to flush the TX FIFO. Reads as 0.            |
-| [4]    | rx_fifo_flush | Self-clearing. Write 1 to flush the RX FIFO. Reads as 0.            |
-| [31:5] | --            | Reserved, reads as 0.                                               |
+| Bits    | Field         | Description                                                         |
+|---------|---------------|---------------------------------------------------------------------|
+| [0]     | baud_gen_en   | Enable baud rate generator. Must be 0 when changing baud_div.       |
+| [1]     | loopback      | Muxes tx output back to rx input of uart_rx, bypassing external serial lines. |
+| [7:2]   | --            | Reserved, reads as 0.                                               |
+| [8]     | sw_reset      | Self-clearing. Write 1 to assert synchronous reset to uart_core for one clock cycle. Reads as 0. |
+| [15:9]  | --            | Reserved, reads as 0.                                               |
+| [16]    | tx_fifo_flush | Self-clearing. Write 1 to flush the TX FIFO. Reads as 0.            |
+| [17]    | rx_fifo_flush | Self-clearing. Write 1 to flush the RX FIFO. Reads as 0.            |
+| [31:18] | --            | Reserved, reads as 0.                                               |
 
 #### LCR (index 1) -- R/W
 
@@ -296,8 +298,9 @@ Indices 17-31 are unmapped and return SLVERR.
 |--------|------------|--------|----------------------------------------------------------------|
 | [0]    | rx_empty   | RO     | RX FIFO is empty.                                              |
 | [1]    | rx_break   | RO     | Line is currently in break. Asserts when break is confirmed; deasserts when rx returns high. |
-| [2]    | rx_overrun | W1C    | Set when a received byte was dropped due to a full RX FIFO. Write 1 to clear. |
-| [31:3] | --         | RO     | Reserved, reads as 0.                                          |
+| [7:2]  | --         | RO     | Reserved, reads as 0.                                          |
+| [8]    | rx_overrun | W1C    | Set when a received byte was dropped due to a full RX FIFO. Write 1 to clear. |
+| [31:9] | --         | RO     | Reserved, reads as 0.                                          |
 
 #### TXD (index 5) -- WO
 
@@ -321,23 +324,25 @@ returns SLVERR.
 
 #### IER (index 7) -- R/W
 
-| Bits   | Field           | Description                                           |
-|--------|-----------------|-------------------------------------------------------|
-| [0]    | tx_empty_en     | Enable TX empty interrupt.                            |
-| [1]    | rx_not_empty_en | Enable RX threshold interrupt.                        |
-| [2]    | rx_error_en     | Enable RX error interrupt.                            |
-| [3]    | rx_timeout_en   | Enable RX timeout interrupt.                          |
-| [31:4] | --              | Reserved, reads as 0.                                 |
+| Bits    | Field           | Description                                           |
+|---------|-----------------|-------------------------------------------------------|
+| [0]     | tx_empty_en     | Enable TX empty interrupt.                            |
+| [7:1]   | --              | Reserved, reads as 0.                                 |
+| [8]     | rx_not_empty_en | Enable RX threshold interrupt.                        |
+| [9]     | rx_error_en     | Enable RX error interrupt.                            |
+| [10]    | rx_timeout_en   | Enable RX timeout interrupt.                          |
+| [31:11] | --              | Reserved, reads as 0.                                 |
 
 #### ISR (index 8) -- W1C
 
-| Bits   | Field            | Description                                                       |
-|--------|------------------|-------------------------------------------------------------------|
-| [0]    | irq_tx_empty     | TX FIFO became empty.                                             |
-| [1]    | irq_rx_not_empty | RX FIFO fill level reached RXTHR.                                 |
-| [2]    | irq_rx_error     | RX error: framing, parity, break, or overrun.                     |
-| [3]    | irq_rx_timeout   | RX FIFO non-empty and no new byte received within RXTOUT baud ticks. |
-| [31:4] | --               | Reserved, reads as 0.                                             |
+| Bits    | Field            | Description                                                       |
+|---------|------------------|-------------------------------------------------------------------|
+| [0]     | irq_tx_empty     | TX FIFO became empty.                                             |
+| [7:1]   | --               | Reserved, reads as 0.                                             |
+| [8]     | irq_rx_not_empty | RX FIFO fill level reached RXTHR.                                 |
+| [9]     | irq_rx_error     | RX error: framing, parity, break, or overrun.                     |
+| [10]    | irq_rx_timeout   | RX FIFO non-empty and no new byte received within RXTOUT baud ticks. |
+| [31:11] | --               | Reserved, reads as 0.                                             |
 
 Bits are cleared by writing 1; writing 0 has no effect. The irq output is the
 OR of all (ISR & IER) bits.
