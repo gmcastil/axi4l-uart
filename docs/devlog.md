@@ -221,3 +221,38 @@ None.
 3. Begin `uart_tx` RTL and unit tests
 
 ---
+
+## Session 4 - 2026-06-02
+
+### What Was Decided
+
+- **Loopback mode confirmed and its driver mapping settled.**
+  Loopback is not required by the serial core framework but is kept for
+  bring-up testability. From userspace it is controlled via `TIOCM_LOOP`
+  (e.g. `ioctl(fd, TIOCMBIS, TIOCM_LOOP)`). The driver's `set_mctrl()`
+  callback handles `TIOCM_LOOP` by toggling the loopback register bit in
+  `uart_ctrl`.
+
+- **Flow control stance settled.**
+  No hardware flow control -- the design has no RTS/CTS lines and the driver
+  will not advertise that capability. Software flow control (XON/XOFF) is
+  handled entirely by the tty line discipline above the driver and requires
+  no driver or hardware support. Both are free consequences of the current
+  design.
+
+- **`tx_empty` driver callback must AND `tx_empty` with `!tx_busy`.**
+  The serial core calls `tx_empty()` to determine whether the port is truly
+  idle (e.g. for `tcdrain()`). Returning TX FIFO empty alone is incorrect --
+  a byte may still be in the shift register. The callback must return
+  `tx_fifo_empty AND !tx_busy`. This is why UTX-008 requires `tx_busy` to
+  remain asserted through the end of the stop bit.
+
+### Open Design Decisions
+
+None beyond those carried from Session 3.
+
+### Next Steps
+
+Same as Session 3.
+
+---
