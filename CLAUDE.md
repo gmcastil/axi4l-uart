@@ -3,6 +3,7 @@
 ## Project
 
 This is a VHDL implementation of a UART with an AXI4-Lite register interface,
+-- Clocks and reset
 targeting Xilinx FPGAs (7 Series and UltraScale). It is being developed and
 verified using VRF, a lightweight SystemVerilog verification framework that lives
 in `extern/verif`.
@@ -97,3 +98,4 @@ pytest-driven pattern as VRF's own integration tests.
 - VHDL follows IEEE 1076-2008. SV testbench code follows IEEE 1800.
 - Clocked testbench code uses clocking blocks with `default input #1step` and
   `default output #1`. Time advances use `##N` notation, not `repeat(N) @(posedge clk)`.
+

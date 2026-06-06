@@ -78,6 +78,7 @@ module baud_rate_gen_unit_test;
         cb.baud_div <= 15'd4;
         ##10;
         `FAIL_UNLESS_EQUAL(cb.baud_tick, 1'b0);
+        `FAIL_UNLESS_EQUAL(cb.baud_cnt,  15'd0);
     `SVTEST_END
 
     // tick fires exactly baud_div+1 cycles after enable is asserted
@@ -135,6 +136,7 @@ module baud_rate_gen_unit_test;
         ##5;                        // mid-count
         cb.baud_gen_en  <= 0;
         ##2;                        // disable takes effect at next cycle; +1 to read that result
+        `FAIL_UNLESS_EQUAL(cb.baud_tick, 1'b0);
         `FAIL_UNLESS_EQUAL(cb.baud_cnt, 15'd0);
     `SVTEST_END
 

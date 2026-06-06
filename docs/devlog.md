@@ -266,6 +266,13 @@ Same as Session 3.
   and presents a 5-bit word index to `uart_ctrl`. Indices 17-31 return SLVERR.
   Full register map documented in `docs/design.md` under `uart_ctrl`.
 
+- **`baud_rate_gen` relocated to `uart_top` level.**
+  Previously inside `uart_core`. Moved up so its tick is available directly to
+  both `uart_ctrl` (RX timeout counter) and `uart_core` (uart_tx, uart_rx)
+  without routing it through `uart_core`'s external interface. `uart_ctrl`
+  drives `baud_div` and `baud_gen_en` directly to `baud_rate_gen`. `uart_core`
+  takes `baud_tick` as an input. Block diagram updated in `design.md`.
+
 - **All signals across module boundaries are now known.**
   `uart_core` is a pure datapath -- no knowledge of thresholds, timeouts, or
   interrupts. All interrupt decision logic lives in `uart_ctrl`.
@@ -341,5 +348,106 @@ Same as Session 3.
 
 1. Define `uart_core` external port list
 2. Begin `uart_tx` RTL and unit tests
+
+---
+
+## Session 6 - 2026-06-02
+
+### What Was Decided
+
+- **`uart_core` external port list defined.**
+  Full interface documented in `design.md` under `uart_core`. Groups: clocking
+  and reset, baud tick, frame config, TX FIFO write port, TX status and
+  counters, FIFO control and mode, RX FIFO read port, RX status and counters,
+  serial lines.
+
+- **`sw_rst` confirmed as one-cycle pulse.**
+  CTRL[8] is self-clearing. `uart_ctrl` generates a one-cycle pulse on `sw_rst`
+  when the bit is written. The Xilinx FIFO reset timing requirements (hold
+  duration, control stability before and after RST) are handled internally by
+  `uart_core`. Implementation deferred.
+
+- **`rx_received` fires on all FIFO writes.**
+  Pulses on every `rx_wr_en`, including errored and break bytes. Does not pulse
+  on overrun (byte was dropped, never written). Used by `uart_ctrl` to reset
+  the RX timeout counter on any received activity.
+
+- **`irq_rx_not_empty` must be edge-triggered.**
+  The ISR bit is set when the RX FIFO fill level crosses RXTHR going upward,
+  not while it remains at or above threshold. Must be an explicit implementation
+  requirement on `uart_ctrl`, not inferred from the register description.
+
+- **RX FIFO underflow protection is two-layered.**
+  Primary: driver reads RXLVL=N and reads RXD exactly N times (snapshot-bounded
+  loop -- cannot underflow because bytes do not disappear between the level read
+  and the data reads). Backstop: `uart_ctrl` returns SLVERR on RXD read when
+  `rx_empty` is asserted, without popping the FIFO. The interrupt re-arms
+  naturally when new data arrives and crosses RXTHR again.
+
+### What Was Done
+
+- `docs/design.md` updated: `uart_core` interface section added; FIFOs table
+  updated with primitive, mode, and depth; FIFO depth TBD item closed.
+
+### Open Design Decisions
+
+- `uart_core` Xilinx FIFO reset sequencing: deferred to implementation
+- `uart_sync_fifo` FIFO mode (FWFT vs standard): deferred to TX+FIFO integration
+- UTX-010 (`tx_rd_en` assertion timing): deferred to TX+FIFO integration
+
+### Next Steps
+
+1. Begin `uart_tx` RTL and unit tests
+
+---
+
+## Session 7 - 2026-06-06
+
+### What Was Decided
+
+- **`baud_rate_gen` signed off.**
+  Two test gaps found and fixed: `no_tick_when_disabled` was missing the
+  `baud_cnt=0` check (BRG-001), and `disable_resets_counter` was missing the
+  `baud_tick=0` check (BRG-006). Both one-line additions. All 7 tests pass.
+
+- **`baud_div_q` registration confirmed correct.**
+  Registering the divisor input unconditionally on every clock edge is the
+  right design. Adding hardware protection against software misuse (gating
+  `baud_div_q` on `baud_gen_en`) is not appropriate -- the 16550 and all
+  standard UART hardware enforce the disable-before-change rule by convention
+  only. Hardware exists to implement behavior, not to babysit the software.
+
+- **FWFT FIFO mode selected for both TX and RX FIFOs.**
+  In FWFT mode the first word is already valid on the output when `tx_empty`
+  deasserts. `uart_tx` latches `tx_data` and asserts `tx_rd_en` on the same
+  clock cycle -- `tx_rd_en` means "advance to next word", not "give me this
+  word". The FIFO going empty on that cycle is not a hazard because the data
+  was already latched. This closes the `uart_sync_fifo` FIFO mode open item.
+
+- **`data_bits` interface changed to actual bit count.**
+  `data_bits` is now `unsigned(3 downto 0)` carrying the actual count (5, 6,
+  7, or 8) rather than a 2-bit encoded value. `uart_ctrl` converts the 2-bit
+  LCR register field to the actual count before driving the port. `design.md`
+  updated throughout: `uart_tx`, `uart_rx`, and `uart_core` interface blocks,
+  requirements UTX-005 and URX-005, and LCR register description.
+
+- **`uart_tx` unit tests written.**
+  20 tests in `tests/uart_tx/uart_tx_unit_test.sv` covering UTX-001 through
+  UTX-012. `baud_tick` is driven directly from the testbench; no
+  `baud_rate_gen` instance. The TX FIFO interface is modeled with simple
+  procedural logic per test; no structural FIFO. Key helpers: `tick()` drives
+  one baud_tick pulse; `bit_period(expected)` advances the DUT through one
+  16-tick bit window and verifies `tx` at tick 1 and tick 8; `check_frame()`
+  covers a complete frame. UTX-010 (`tx_rd_en` exact timing) remains deferred.
+
+### Open Design Decisions
+
+- `uart_core` Xilinx FIFO reset sequencing: deferred to implementation
+- UTX-010 (`tx_rd_en` assertion timing): deferred to TX+FIFO integration
+
+### Next Steps
+
+1. Write `uart_tx` RTL
+2. Run `uart_tx` unit tests and sign off
 
 ---
